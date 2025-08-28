@@ -34,6 +34,21 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import kotlin.coroutines.CoroutineContext
 
+/***
+     * val s3Uploader = S3Uploader.builder()
+    .bucket("my-bucket")
+    .region(Region.US_WEST_2)
+    .build()
+
+    // Upload file
+    val result = s3Uploader.uploadFile(File("file.txt"), "documents/file.txt")
+
+    // Make public
+    s3Uploader.makePublic("documents/file.txt")
+
+    // List folder
+    s3Uploader.listFolder("documents/").collect { println(it.key) }
+***/
 class S3Uploader private constructor(
     private val bucketName: String,
     val region: Region,
@@ -72,7 +87,7 @@ class S3Uploader private constructor(
 
         fun build(): S3Uploader {
             require(bucketName.isNotBlank()) { "Bucket name must be specified" }
-            
+
             return S3Uploader(
                 bucketName = bucketName,
                 region = region,
@@ -86,12 +101,17 @@ class S3Uploader private constructor(
     }
 
     // Upload functions
-    suspend fun uploadFile(file: File, key: String, contentType: String? = null, metadata: Map<String, String> = emptyMap()): UploadResult = withContext(coroutineContext) {
+    suspend fun uploadFile(
+        file: File,
+        key: String,
+        contentType: String? = null,
+        metadata: Map<String, String> = emptyMap()
+    ): UploadResult = withContext(coroutineContext) {
         try {
             val s3Client = S3Client.builder().region(region).build()
             val request = buildPutObjectRequest(key, contentType, metadata)
             val response = s3Client.putObject(request, RequestBody.fromFile(file))
-            
+
             UploadResult(
                 success = true,
                 eTag = response.eTag(),
@@ -103,20 +123,27 @@ class S3Uploader private constructor(
     }
 
     @RequiresApi(Build.VERSION_CODES.N)
-    fun uploadFileAsync(file: File, key: String, contentType: String? = null, metadata: Map<String, String> = emptyMap()): Flow<UploadResult> = flow {
+    fun uploadFileAsync(
+        file: File,
+        key: String,
+        contentType: String? = null,
+        metadata: Map<String, String> = emptyMap()
+    ): Flow<UploadResult> = flow {
         val s3Client = S3AsyncClient.builder().region(region).build()
         val request = buildPutObjectRequest(key, contentType, metadata)
-        
-        val future: CompletableFuture<PutObjectResponse> = 
+
+        val future: CompletableFuture<PutObjectResponse> =
             s3Client.putObject(request, AsyncRequestBody.fromFile(file))
-        
+
         try {
             val response = future.await()
-            emit(UploadResult(
-                success = true,
-                eTag = response.eTag(),
-                versionId = response.versionId()
-            ))
+            emit(
+                UploadResult(
+                    success = true,
+                    eTag = response.eTag(),
+                    versionId = response.versionId()
+                )
+            )
         } catch (e: Exception) {
             emit(UploadResult(success = false, error = e))
         } finally {
@@ -124,7 +151,6 @@ class S3Uploader private constructor(
         }
     }.flowOn(coroutineContext)
 
-    @SuppressLint("NewApi")
     fun uploadWithProgress(
         inputStream: InputStream,
         contentLength: Long,
@@ -139,7 +165,11 @@ class S3Uploader private constructor(
         var currentProgress: UploadProgress? = null
 
         val progressRequestBody = ProgressAsyncRequestBody(
-            AsyncRequestBody.fromInputStream(inputStream, contentLength, Executors.newCachedThreadPool()),
+            AsyncRequestBody.fromInputStream(
+                inputStream,
+                contentLength,
+                Executors.newCachedThreadPool()
+            ),
             onProgress = { bytesWritten, totalBytes ->
                 currentProgress = UploadProgress.InProgress(bytesWritten, totalBytes)
             }
@@ -149,10 +179,12 @@ class S3Uploader private constructor(
             val response = s3Client.putObject(request, progressRequestBody).await()
             // Emit the final progress before completion
             currentProgress?.let { emit(it) }
-            emit(UploadProgress.Completed(
-                eTag = response.eTag(),
-                versionId = response.versionId()
-            ))
+            emit(
+                UploadProgress.Completed(
+                    eTag = response.eTag(),
+                    versionId = response.versionId()
+                )
+            )
         } catch (e: Exception) {
             emit(UploadProgress.Failed(e))
         } finally {
@@ -168,7 +200,7 @@ class S3Uploader private constructor(
                 .bucket(bucketName)
                 .key(key)
                 .build()
-            
+
             s3Client.deleteObject(request)
             OperationResult(success = true, message = "Object '$key' deleted successfully")
         } catch (e: Exception) {
@@ -179,11 +211,11 @@ class S3Uploader private constructor(
     suspend fun deleteObjects(keys: List<String>): FolderResult = withContext(coroutineContext) {
         try {
             val s3Client = S3Client.builder().region(region).build()
-            
+
             val objectsToDelete = keys.map { key ->
                 ObjectIdentifier.builder().key(key).build()
             }
-            
+
             val request = DeleteObjectsRequest.builder()
                 .bucket(bucketName)
                 .delete { delete ->
@@ -191,7 +223,7 @@ class S3Uploader private constructor(
                     delete.quiet(true)
                 }
                 .build()
-            
+
             val response = s3Client.deleteObjects(request)
             FolderResult(
                 success = true,
@@ -203,33 +235,37 @@ class S3Uploader private constructor(
     }
 
     // RENAME/MOVE operations
-    suspend fun renameObject(oldKey: String, newKey: String): OperationResult = withContext(coroutineContext) {
-        try {
-            val s3Client = S3Client.builder().region(region).build()
-            
-            // Copy object to new key
-            val copyRequest = CopyObjectRequest.builder()
-                .sourceBucket(bucketName)
-                .sourceKey(oldKey)
-                .destinationBucket(bucketName)
-                .destinationKey(newKey)
-                .build()
-            
-            s3Client.copyObject(copyRequest)
-            
-            // Delete original object
-            val deleteRequest = DeleteObjectRequest.builder()
-                .bucket(bucketName)
-                .key(oldKey)
-                .build()
-            
-            s3Client.deleteObject(deleteRequest)
-            
-            OperationResult(success = true, message = "Object renamed from '$oldKey' to '$newKey'")
-        } catch (e: Exception) {
-            OperationResult(success = false, error = e)
+    suspend fun renameObject(oldKey: String, newKey: String): OperationResult =
+        withContext(coroutineContext) {
+            try {
+                val s3Client = S3Client.builder().region(region).build()
+
+                // Copy object to new key
+                val copyRequest = CopyObjectRequest.builder()
+                    .sourceBucket(bucketName)
+                    .sourceKey(oldKey)
+                    .destinationBucket(bucketName)
+                    .destinationKey(newKey)
+                    .build()
+
+                s3Client.copyObject(copyRequest)
+
+                // Delete original object
+                val deleteRequest = DeleteObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(oldKey)
+                    .build()
+
+                s3Client.deleteObject(deleteRequest)
+
+                OperationResult(
+                    success = true,
+                    message = "Object renamed from '$oldKey' to '$newKey'"
+                )
+            } catch (e: Exception) {
+                OperationResult(success = false, error = e)
+            }
         }
-    }
 
     suspend fun moveObject(sourceKey: String, destinationKey: String): OperationResult {
         return renameObject(sourceKey, destinationKey)
@@ -239,13 +275,13 @@ class S3Uploader private constructor(
     suspend fun makePublic(key: String): OperationResult = withContext(coroutineContext) {
         try {
             val s3Client = S3Client.builder().region(region).build()
-            
+
             val request = PutObjectAclRequest.builder()
                 .bucket(bucketName)
                 .key(key)
                 .acl(ObjectCannedACL.PUBLIC_READ)
                 .build()
-            
+
             s3Client.putObjectAcl(request)
             OperationResult(success = true, message = "Object '$key' is now public")
         } catch (e: Exception) {
@@ -256,13 +292,13 @@ class S3Uploader private constructor(
     suspend fun makePrivate(key: String): OperationResult = withContext(coroutineContext) {
         try {
             val s3Client = S3Client.builder().region(region).build()
-            
+
             val request = PutObjectAclRequest.builder()
                 .bucket(bucketName)
                 .key(key)
                 .acl(ObjectCannedACL.PRIVATE)
                 .build()
-            
+
             s3Client.putObjectAcl(request)
             OperationResult(success = true, message = "Object '$key' is now private")
         } catch (e: Exception) {
@@ -272,12 +308,12 @@ class S3Uploader private constructor(
 
     suspend fun getAcl(key: String): Flow<Grant> = flow {
         val s3Client = S3Client.builder().region(region).build()
-        
+
         val request = GetObjectAclRequest.builder()
             .bucket(bucketName)
             .key(key)
             .build()
-        
+
         val response = s3Client.getObjectAcl(request)
         response.grants().forEach { grant ->
             emit(grant)
@@ -288,13 +324,16 @@ class S3Uploader private constructor(
     suspend fun createFolder(folderPath: String): OperationResult = withContext(coroutineContext) {
         try {
             val normalizedPath = if (folderPath.endsWith("/")) folderPath else "$folderPath/"
-            
+
             val s3Client = S3Client.builder().region(region).build()
             val request = buildPutObjectRequest(normalizedPath, null, emptyMap())
-            
+
             s3Client.putObject(request, RequestBody.empty())
-            
-            OperationResult(success = true, message = "Folder '$normalizedPath' created successfully")
+
+            OperationResult(
+                success = true,
+                message = "Folder '$normalizedPath' created successfully"
+            )
         } catch (e: Exception) {
             OperationResult(success = false, error = e)
         }
@@ -303,24 +342,24 @@ class S3Uploader private constructor(
     suspend fun deleteFolder(folderPath: String): FolderResult = withContext(coroutineContext) {
         try {
             val normalizedPath = if (folderPath.endsWith("/")) folderPath else "$folderPath/"
-            
+
             val s3Client = S3Client.builder().region(region).build()
-            
+
             val listRequest = ListObjectsV2Request.builder()
                 .bucket(bucketName)
                 .prefix(normalizedPath)
                 .build()
-            
+
             val objects = s3Client.listObjectsV2(listRequest).contents()
             val keysToDelete = objects.map { it.key() }
-            
+
             if (keysToDelete.isEmpty()) {
                 // Fixed: Use OperationResult instead of FolderResult for empty folder case
                 return@withContext FolderResult(success = true)
             }
-            
+
             val deleteResult = deleteObjects(keysToDelete)
-            
+
             FolderResult(
                 success = deleteResult.success,
                 deletedObjects = keysToDelete,
@@ -333,9 +372,9 @@ class S3Uploader private constructor(
 
     suspend fun listFolder(folderPath: String): Flow<S3Object> = flow {
         val s3Client = S3Client.builder().region(region).build()
-        
+
         val normalizedPath = if (folderPath.endsWith("/")) folderPath else "$folderPath/"
-        
+
         var continuationToken: String? = null
         do {
             val listRequest = ListObjectsV2Request.builder()
@@ -343,12 +382,12 @@ class S3Uploader private constructor(
                 .prefix(normalizedPath)
                 .continuationToken(continuationToken)
                 .build()
-            
+
             val response = s3Client.listObjectsV2(listRequest)
             response.contents().forEach { objectSummary ->
                 emit(objectSummary)
             }
-            
+
             continuationToken = response.continuationToken()
         } while (response.isTruncated())
     }.flowOn(coroutineContext)
@@ -357,12 +396,12 @@ class S3Uploader private constructor(
     suspend fun objectExists(key: String): Boolean = withContext(coroutineContext) {
         try {
             val s3Client = S3Client.builder().region(region).build()
-            
+
             val request = HeadObjectRequest.builder()
                 .bucket(bucketName)
                 .key(key)
                 .build()
-            
+
             s3Client.headObject(request)
             true
         } catch (e: Exception) {
