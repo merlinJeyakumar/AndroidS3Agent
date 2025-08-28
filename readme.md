@@ -23,3 +23,21 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("software.amazon.awssdk:s3:2.20.0")
 }
+
+
+
+```kotlin
+val s3Uploader = S3Uploader.builder()
+    .bucket("my-bucket")
+    .region(Region.US_WEST_2)
+    .build()
+
+// Upload file
+val result = s3Uploader.uploadFile(File("file.txt"), "documents/file.txt")
+
+// Make public
+s3Uploader.makePublic("documents/file.txt")
+
+// List folder
+s3Uploader.listFolder("documents/").collect { println(it.key) }
+```
