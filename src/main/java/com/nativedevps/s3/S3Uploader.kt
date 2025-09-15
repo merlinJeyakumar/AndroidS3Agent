@@ -1,8 +1,8 @@
-package com.nativedevps.s3
+package com.nativedevps.s3agent.s3
 
-import android.annotation.SuppressLint
 import android.os.Build
 import androidx.annotation.RequiresApi
+import com.nativedevps.s3.ProgressAsyncRequestBody
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -34,21 +34,6 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import kotlin.coroutines.CoroutineContext
 
-/***
-     * val s3Uploader = S3Uploader.builder()
-    .bucket("my-bucket")
-    .region(Region.US_WEST_2)
-    .build()
-
-    // Upload file
-    val result = s3Uploader.uploadFile(File("file.txt"), "documents/file.txt")
-
-    // Make public
-    s3Uploader.makePublic("documents/file.txt")
-
-    // List folder
-    s3Uploader.listFolder("documents/").collect { println(it.key) }
-***/
 class S3Uploader private constructor(
     private val bucketName: String,
     val region: Region,
@@ -161,6 +146,9 @@ class S3Uploader private constructor(
         val s3Client = S3AsyncClient.builder().region(region).build()
         val request = buildPutObjectRequest(key, contentType, metadata)
 
+        // Use bytes approach instead of problematic InputStream with progress
+        val bytes = inputStream.readBytes()
+
         // Create a mutable reference to track progress
         var currentProgress: UploadProgress? = null
 
@@ -177,8 +165,6 @@ class S3Uploader private constructor(
 
         try {
             val response = s3Client.putObject(request, progressRequestBody).await()
-            // Emit the final progress before completion
-            currentProgress?.let { emit(it) }
             emit(
                 UploadProgress.Completed(
                     eTag = response.eTag(),
@@ -189,6 +175,7 @@ class S3Uploader private constructor(
             emit(UploadProgress.Failed(e))
         } finally {
             s3Client.close()
+            inputStream.close()
         }
     }.flowOn(coroutineContext)
 
@@ -354,7 +341,6 @@ class S3Uploader private constructor(
             val keysToDelete = objects.map { it.key() }
 
             if (keysToDelete.isEmpty()) {
-                // Fixed: Use OperationResult instead of FolderResult for empty folder case
                 return@withContext FolderResult(success = true)
             }
 
@@ -417,7 +403,7 @@ class S3Uploader private constructor(
         return getObjectUrl(key)
     }
 
-    fun buildPutObjectRequest(
+    private fun buildPutObjectRequest(
         key: String,
         contentType: String? = null,
         metadata: Map<String, String> = emptyMap()
