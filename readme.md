@@ -1,14 +1,18 @@
-Here's a comprehensive README.md file for your S3Uploader library:
-
 # S3Uploader Kotlin Library
 
 A powerful, coroutine-based AWS S3 client library for Kotlin with builder pattern support, flow integration, and comprehensive file operations.
+
+![Kotlin](https://img.shields.io/badge/Kotlin-1.9.0-blue.svg)
+![AWS SDK](https://img.shields.io/badge/AWS%20SDK-2.20.0-orange.svg)
+![Coroutines](https://img.shields.io/badge/Coroutines-1.7.3-green.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📦 Features
 
 - ✅ **Builder Pattern** - Fluent API for easy configuration
 - ✅ **Coroutine Support** - Async operations with structured concurrency
 - ✅ **Flow Integration** - Reactive progress tracking and real-time updates
+- ✅ **Multiple Auth Methods** - Environment variables, AWS config, or programmatic credentials
 - ✅ **Comprehensive Operations** - Upload, delete, rename, ACL management, and more
 - ✅ **Progress Tracking** - Real-time upload progress with Flow
 - ✅ **Batch Operations** - Process multiple files efficiently
@@ -39,20 +43,29 @@ dependencies {
 }
 ```
 
-## 🔧 Configuration
+## 🔐 Authentication Setup
 
-### AWS Credentials Setup
+### Method 1: Environment Variables (Recommended)
 
-The library uses AWS SDK's default credential provider chain. Set up credentials using one of these methods:
-
-#### Environment Variables (Recommended)
 ```bash
+# Linux/macOS
 export AWS_ACCESS_KEY_ID=your_access_key_id
 export AWS_SECRET_ACCESS_KEY=your_secret_access_key
 export AWS_REGION=us-west-2
+
+# Windows (Command Prompt)
+set AWS_ACCESS_KEY_ID=your_access_key_id
+set AWS_SECRET_ACCESS_KEY=your_secret_access_key
+set AWS_REGION=us-west-2
+
+# Windows (PowerShell)
+$env:AWS_ACCESS_KEY_ID="your_access_key_id"
+$env:AWS_SECRET_ACCESS_KEY="your_secret_access_key"
+$env:AWS_REGION="us-west-2"
 ```
 
-#### AWS Credentials File
+### Method 2: AWS Credentials File
+
 Create `~/.aws/credentials`:
 ```ini
 [default]
@@ -66,26 +79,33 @@ Create `~/.aws/config`:
 region = us-west-2
 ```
 
-#### IAM Roles (AWS Infrastructure)
-When running on EC2, ECS, or Lambda, IAM roles are automatically used.
+### Method 3: Programmatic Credentials (Development Only)
+
+```kotlin
+val s3Uploader = S3Uploader.builder()
+    .bucket("my-bucket")
+    .region(Region.US_WEST_2)
+    .credentials(
+        accessKeyId = "AKIAIOSFODNN7EXAMPLE",
+        secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    )
+    .build()
+```
 
 ## 📖 Quick Start
 
-### Basic Usage
+### Basic File Upload
 
 ```kotlin
 import com.nativedevps.s3agent.s3.S3Uploader
 import software.amazon.awssdk.regions.Region
-import java.io.File
 
 suspend fun main() {
-    // Initialize S3Uploader
     val s3Uploader = S3Uploader.builder()
         .bucket("your-bucket-name")
         .region(Region.US_WEST_2)
         .build()
 
-    // Upload a file
     val result = s3Uploader.uploadFile(
         file = File("document.pdf"),
         key = "documents/report.pdf",
@@ -100,15 +120,9 @@ suspend fun main() {
 }
 ```
 
-### Advanced Usage with Progress Tracking
+### Upload with Progress Tracking
 
 ```kotlin
-val s3Uploader = S3Uploader.builder()
-    .bucket("media-bucket")
-    .region(Region.US_WEST_2)
-    .build()
-
-// Upload with progress tracking
 s3Uploader.uploadWithProgress(
     inputStream = file.inputStream(),
     contentLength = file.length(),
@@ -144,10 +158,6 @@ fun uploadFileAsync(file: File, key: String, contentType: String?, metadata: Map
 
 // Upload with progress
 fun uploadWithProgress(inputStream: InputStream, contentLength: Long, key: String, contentType: String?, metadata: Map<String, String>): Flow<UploadProgress>
-
-// Delete operations
-suspend fun deleteObject(key: String): OperationResult
-suspend fun deleteObjects(keys: List<String>): FolderResult
 ```
 
 #### Folder Operations
@@ -225,13 +235,14 @@ The library follows these design principles:
 - **Builder Pattern** for fluent and type-safe configuration
 - **Coroutine-first** design for async operations
 - **Flow integration** for reactive programming
+- **Multiple authentication** methods for flexibility
 - **Immutability** with data classes for results
 - **Proper error handling** with detailed error information
 - **Resource safety** with automatic client cleanup
 
 ## 📚 Examples
 
-### Example 1: User Profile Picture Upload
+### User Profile Picture Upload
 
 ```kotlin
 suspend fun uploadUserProfile(userId: String, imageFile: File) {
@@ -244,7 +255,7 @@ suspend fun uploadUserProfile(userId: String, imageFile: File) {
         file = imageFile,
         key = "users/$userId/profile.jpg",
         contentType = "image/jpeg",
-        metadata = mapOf("user_id" to userId, "upload_type" to "profile")
+        metadata = mapOf("user_id" to userId)
     )
 
     if (result.success) {
@@ -255,7 +266,7 @@ suspend fun uploadUserProfile(userId: String, imageFile: File) {
 }
 ```
 
-### Example 2: Batch Document Processing
+### Batch Document Processing
 
 ```kotlin
 suspend fun processDocuments(documents: List<File>) {
@@ -264,11 +275,9 @@ suspend fun processDocuments(documents: List<File>) {
         .region(Region.EU_WEST_1)
         .build()
 
-    // Create folder structure
     val date = java.time.LocalDate.now().toString()
     s3Uploader.createFolder("uploads/$date/")
 
-    // Upload all documents
     documents.forEach { document ->
         s3Uploader.uploadFileAsync(
             file = document,
@@ -283,33 +292,29 @@ suspend fun processDocuments(documents: List<File>) {
 }
 ```
 
-### Example 3: Real-time File Sync
+### Secure File Management
 
 ```kotlin
-class FileSyncService {
+class SecureFileManager {
     private val s3Uploader = S3Uploader.builder()
-        .bucket("sync-bucket")
-        .region(Region.US_EAST_1)
+        .bucket("secure-files")
+        .region(Region.US_GOV_EAST_1)
         .build()
 
-    suspend fun syncFile(file: File, remotePath: String) {
-        s3Uploader.uploadWithProgress(
-            inputStream = file.inputStream(),
-            contentLength = file.length(),
-            key = remotePath,
-            contentType = getContentType(file)
-        ).collect { progress ->
-            when (progress) {
-                is UploadProgress.InProgress -> {
-                    updateProgressBar(progress.bytesWritten, progress.totalBytes)
-                }
-                is UploadProgress.Completed -> {
-                    showSuccess("File synced successfully!")
-                }
-                is UploadProgress.Failed -> {
-                    showError("Sync failed: ${progress.error.message}")
-                }
-            }
+    suspend fun uploadPrivateDocument(file: File, documentId: String): String {
+        val key = "private/documents/$documentId"
+        
+        val result = s3Uploader.uploadFile(
+            file = file,
+            key = key,
+            contentType = "application/pdf"
+        )
+
+        if (result.success) {
+            s3Uploader.makePrivate(key)
+            return key
+        } else {
+            throw Exception("Upload failed: ${result.error?.message}")
         }
     }
 }
@@ -317,12 +322,14 @@ class FileSyncService {
 
 ## 🔒 Security Best Practices
 
-1. **Never hardcode credentials** in source code
-2. **Use IAM roles** when running on AWS infrastructure
-3. **Set appropriate bucket policies** for your use case
-4. **Use private ACL** for sensitive files
-5. **Implement proper error handling** and logging
-6. **Validate file types** and sizes before upload
+1. **✅ Use environment variables** for production deployments
+2. **✅ Implement IAM roles** on AWS infrastructure (EC2, ECS, Lambda)
+3. **✅ Set appropriate bucket policies** for your use case
+4. **✅ Use private ACL** for sensitive files
+5. **✅ Rotate credentials** regularly
+6. **❌ Never hardcode credentials** in source code
+7. **❌ Never commit secrets** to version control
+8. **❌ Avoid programmatic credentials** in production
 
 ## 🐛 Troubleshooting
 
@@ -335,9 +342,21 @@ class FileSyncService {
 
 ### Debug Mode
 
-Enable AWS SDK logging by setting environment variable:
+Enable AWS SDK logging:
 ```bash
 export AWS_LOG_LEVEL=DEBUG
+```
+
+### Error Handling
+
+```kotlin
+val result = s3Uploader.uploadFile(file, key, contentType)
+when {
+    result.success -> println("Success: ${result.eTag}")
+    result.error is AmazonS3Exception -> println("S3 error: ${result.error.message}")
+    result.error is IOException -> println("Network error: ${result.error.message}")
+    else -> println("Unknown error: ${result.error?.message}")
+}
 ```
 
 ## 📊 Performance Tips
@@ -350,11 +369,23 @@ export AWS_LOG_LEVEL=DEBUG
 
 ## 🤝 Contributing
 
+We welcome contributions! Please follow these steps:
+
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/new-feature`
 3. Commit changes: `git commit -am 'Add new feature'`
 4. Push to branch: `git push origin feature/new-feature`
 5. Submit a pull request
+
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/your-username/s3-uploader-kotlin.git
+
+# Open in IntelliJ IDEA or Android Studio
+# Ensure Kotlin and AWS SDK dependencies are configured
+```
 
 ## 📄 License
 
@@ -384,9 +415,10 @@ SOFTWARE.
 
 ## 📞 Support
 
-- 📧 Email: support@nativedevps.com
-- 🐛 Issues: GitHub Issues page
-- 📚 Documentation: AWS S3 Developer Guide
+- 📧 **Email**: support@nativedevps.com
+- 🐛 **Issues**: [GitHub Issues](https://github.com/nativedevps/s3-uploader-kotlin/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/nativedevps/s3-uploader-kotlin/discussions)
+- 📚 **Documentation**: [AWS S3 Developer Guide](https://docs.aws.amazon.com/s3/)
 
 ## 🔗 Related Projects
 
@@ -394,6 +426,17 @@ SOFTWARE.
 - [Kotlin Coroutines](https://github.com/Kotlin/kotlinx.coroutines)
 - [Kotlin Flow](https://kotlinlang.org/docs/flow.html)
 
+## 🚀 Changelog
+
+### v1.0.0
+- Initial release with comprehensive S3 operations
+- Builder pattern implementation
+- Coroutine and Flow support
+- Multiple authentication methods
+- Progress tracking functionality
+
 ---
 
 **⭐ If you find this library useful, please give it a star on GitHub!**
+
+For more information, visit our [GitHub repository](https://github.com/nativedevps/s3-uploader-kotlin) or check the [AWS S3 documentation](https://docs.aws.amazon.com/s3/).

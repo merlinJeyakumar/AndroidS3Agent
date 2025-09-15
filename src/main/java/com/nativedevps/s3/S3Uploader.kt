@@ -10,24 +10,15 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.withContext
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
+import software.amazon.awssdk.auth.credentials.AwsSessionCredentials
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.core.async.AsyncRequestBody
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3AsyncClient
 import software.amazon.awssdk.services.s3.S3Client
-import software.amazon.awssdk.services.s3.model.CopyObjectRequest
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest
-import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest
-import software.amazon.awssdk.services.s3.model.GetObjectAclRequest
-import software.amazon.awssdk.services.s3.model.Grant
-import software.amazon.awssdk.services.s3.model.HeadObjectRequest
-import software.amazon.awssdk.services.s3.model.ListObjectsV2Request
-import software.amazon.awssdk.services.s3.model.ObjectCannedACL
-import software.amazon.awssdk.services.s3.model.ObjectIdentifier
-import software.amazon.awssdk.services.s3.model.PutObjectAclRequest
-import software.amazon.awssdk.services.s3.model.PutObjectRequest
-import software.amazon.awssdk.services.s3.model.PutObjectResponse
-import software.amazon.awssdk.services.s3.model.S3Object
+import software.amazon.awssdk.services.s3.model.*
 import java.io.File
 import java.io.InputStream
 import java.util.concurrent.CompletableFuture
@@ -37,7 +28,10 @@ import kotlin.coroutines.CoroutineContext
 class S3Uploader private constructor(
     private val bucketName: String,
     val region: Region,
-    override val coroutineContext: CoroutineContext
+    override val coroutineContext: CoroutineContext,
+    private val accessKeyId: String? = null,
+    private val secretAccessKey: String? = null,
+    private val sessionToken: String? = null
 ) : CoroutineScope {
 
     data class UploadResult(
@@ -64,11 +58,21 @@ class S3Uploader private constructor(
         private var bucketName: String = ""
         private var region: Region = Region.US_EAST_1
         private var coroutineContext: CoroutineContext = Dispatchers.IO
+        private var accessKeyId: String? = null
+        private var secretAccessKey: String? = null
+        private var sessionToken: String? = null
 
         fun bucket(bucketName: String) = apply { this.bucketName = bucketName }
         fun region(region: Region) = apply { this.region = region }
         fun region(region: String) = apply { this.region = Region.of(region) }
         fun coroutineContext(context: CoroutineContext) = apply { this.coroutineContext = context }
+
+        // For programmatic credentials (use only for development/testing)
+        fun credentials(accessKeyId: String, secretAccessKey: String, sessionToken: String? = null) = apply {
+            this.accessKeyId = accessKeyId
+            this.secretAccessKey = secretAccessKey
+            this.sessionToken = sessionToken
+        }
 
         fun build(): S3Uploader {
             require(bucketName.isNotBlank()) { "Bucket name must be specified" }
@@ -76,13 +80,48 @@ class S3Uploader private constructor(
             return S3Uploader(
                 bucketName = bucketName,
                 region = region,
-                coroutineContext = coroutineContext
+                coroutineContext = coroutineContext,
+                accessKeyId = accessKeyId,
+                secretAccessKey = secretAccessKey,
+                sessionToken = sessionToken
             )
         }
     }
 
     companion object {
         fun builder() = Builder()
+    }
+
+    private fun createS3Client(): S3Client {
+        val builder = S3Client.builder().region(region)
+
+        // Add credentials if provided programmatically
+        if (accessKeyId != null && secretAccessKey != null) {
+            val credentials = if (sessionToken != null) {
+                AwsSessionCredentials.create(accessKeyId, secretAccessKey, sessionToken)
+            } else {
+                AwsBasicCredentials.create(accessKeyId, secretAccessKey)
+            }
+            builder.credentialsProvider(StaticCredentialsProvider.create(credentials))
+        }
+
+        return builder.build()
+    }
+
+    private fun createS3AsyncClient(): S3AsyncClient {
+        val builder = S3AsyncClient.builder().region(region)
+
+        // Add credentials if provided programmatically
+        if (accessKeyId != null && secretAccessKey != null) {
+            val credentials = if (sessionToken != null) {
+                AwsSessionCredentials.create(accessKeyId, secretAccessKey, sessionToken)
+            } else {
+                AwsBasicCredentials.create(accessKeyId, secretAccessKey)
+            }
+            builder.credentialsProvider(StaticCredentialsProvider.create(credentials))
+        }
+
+        return builder.build()
     }
 
     // Upload functions
@@ -93,7 +132,7 @@ class S3Uploader private constructor(
         metadata: Map<String, String> = emptyMap()
     ): UploadResult = withContext(coroutineContext) {
         try {
-            val s3Client = S3Client.builder().region(region).build()
+            val s3Client = createS3Client()
             val request = buildPutObjectRequest(key, contentType, metadata)
             val response = s3Client.putObject(request, RequestBody.fromFile(file))
 
@@ -114,7 +153,7 @@ class S3Uploader private constructor(
         contentType: String? = null,
         metadata: Map<String, String> = emptyMap()
     ): Flow<UploadResult> = flow {
-        val s3Client = S3AsyncClient.builder().region(region).build()
+        val s3Client = createS3AsyncClient()
         val request = buildPutObjectRequest(key, contentType, metadata)
 
         val future: CompletableFuture<PutObjectResponse> =
@@ -143,10 +182,10 @@ class S3Uploader private constructor(
         contentType: String? = null,
         metadata: Map<String, String> = emptyMap()
     ): Flow<UploadProgress> = flow {
-        val s3Client = S3AsyncClient.builder().region(region).build()
+        val s3Client = createS3AsyncClient()
         val request = buildPutObjectRequest(key, contentType, metadata)
 
-        // Use bytes approach instead of problematic InputStream with progress
+        // Use bytes approach for reliable progress tracking
         val bytes = inputStream.readBytes()
 
         // Create a mutable reference to track progress
@@ -182,7 +221,7 @@ class S3Uploader private constructor(
     // DELETE operations
     suspend fun deleteObject(key: String): OperationResult = withContext(coroutineContext) {
         try {
-            val s3Client = S3Client.builder().region(region).build()
+            val s3Client = createS3Client()
             val request = DeleteObjectRequest.builder()
                 .bucket(bucketName)
                 .key(key)
@@ -197,7 +236,7 @@ class S3Uploader private constructor(
 
     suspend fun deleteObjects(keys: List<String>): FolderResult = withContext(coroutineContext) {
         try {
-            val s3Client = S3Client.builder().region(region).build()
+            val s3Client = createS3Client()
 
             val objectsToDelete = keys.map { key ->
                 ObjectIdentifier.builder().key(key).build()
@@ -225,7 +264,7 @@ class S3Uploader private constructor(
     suspend fun renameObject(oldKey: String, newKey: String): OperationResult =
         withContext(coroutineContext) {
             try {
-                val s3Client = S3Client.builder().region(region).build()
+                val s3Client = createS3Client()
 
                 // Copy object to new key
                 val copyRequest = CopyObjectRequest.builder()
@@ -261,7 +300,7 @@ class S3Uploader private constructor(
     // ACL operations
     suspend fun makePublic(key: String): OperationResult = withContext(coroutineContext) {
         try {
-            val s3Client = S3Client.builder().region(region).build()
+            val s3Client = createS3Client()
 
             val request = PutObjectAclRequest.builder()
                 .bucket(bucketName)
@@ -278,7 +317,7 @@ class S3Uploader private constructor(
 
     suspend fun makePrivate(key: String): OperationResult = withContext(coroutineContext) {
         try {
-            val s3Client = S3Client.builder().region(region).build()
+            val s3Client = createS3Client()
 
             val request = PutObjectAclRequest.builder()
                 .bucket(bucketName)
@@ -294,7 +333,7 @@ class S3Uploader private constructor(
     }
 
     suspend fun getAcl(key: String): Flow<Grant> = flow {
-        val s3Client = S3Client.builder().region(region).build()
+        val s3Client = createS3Client()
 
         val request = GetObjectAclRequest.builder()
             .bucket(bucketName)
@@ -312,7 +351,7 @@ class S3Uploader private constructor(
         try {
             val normalizedPath = if (folderPath.endsWith("/")) folderPath else "$folderPath/"
 
-            val s3Client = S3Client.builder().region(region).build()
+            val s3Client = createS3Client()
             val request = buildPutObjectRequest(normalizedPath, null, emptyMap())
 
             s3Client.putObject(request, RequestBody.empty())
@@ -330,7 +369,7 @@ class S3Uploader private constructor(
         try {
             val normalizedPath = if (folderPath.endsWith("/")) folderPath else "$folderPath/"
 
-            val s3Client = S3Client.builder().region(region).build()
+            val s3Client = createS3Client()
 
             val listRequest = ListObjectsV2Request.builder()
                 .bucket(bucketName)
@@ -357,7 +396,7 @@ class S3Uploader private constructor(
     }
 
     suspend fun listFolder(folderPath: String): Flow<S3Object> = flow {
-        val s3Client = S3Client.builder().region(region).build()
+        val s3Client = createS3Client()
 
         val normalizedPath = if (folderPath.endsWith("/")) folderPath else "$folderPath/"
 
@@ -381,7 +420,7 @@ class S3Uploader private constructor(
     // Utility functions
     suspend fun objectExists(key: String): Boolean = withContext(coroutineContext) {
         try {
-            val s3Client = S3Client.builder().region(region).build()
+            val s3Client = createS3Client()
 
             val request = HeadObjectRequest.builder()
                 .bucket(bucketName)
