@@ -442,7 +442,7 @@ class S3Uploader private constructor(
         return getObjectUrl(key)
     }
 
-    private fun buildPutObjectRequest(
+    fun buildPutObjectRequest(
         key: String,
         contentType: String? = null,
         metadata: Map<String, String> = emptyMap()

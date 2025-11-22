@@ -1,12 +1,12 @@
 package com.nativedevps.s3.utility
 
-import com.nativedevps.s3.S3Uploader
-import com.nativedevps.s3.UploadProgress
+import com.nativedevps.s3agent.s3.S3Uploader
+import com.nativedevps.s3agent.s3.UploadProgress
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import software.amazon.awssdk.services.s3.model.S3Object
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.services.s3.S3Client
+import software.amazon.awssdk.services.s3.model.S3Object
 
 // Extension properties
 val S3Uploader.OperationResult.isSuccessful: Boolean
